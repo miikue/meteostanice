@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <esp_sleep.h>
 #include <Wire.h>
 #include <Adafruit_BME280.h>
 #include <Adafruit_LTR390.h>
@@ -11,6 +12,11 @@ const char *SERVER_HOST = "10.10.10.214";
 const uint16_t SERVER_PORT = 5000;
 const char *SERVER_PATH = "/ingest";
 
+const int SENSOR_POWER_PIN = 35;
+const int SENSOR_EN_PIN_1 = 4;
+const int SENSOR_EN_PIN_2 = 47;
+const unsigned long SENSOR_POWER_STABILIZE_MS = 1000;
+
 TwoWire Wire2 = TwoWire(1);
 
 Adafruit_BME280 bme1;
@@ -19,11 +25,6 @@ Adafruit_LTR390 ltr1 = Adafruit_LTR390();
 Adafruit_BME280 bme2;
 Adafruit_LTR390 ltr2 = Adafruit_LTR390();
 
-const int VOLTAGE_PIN = 6;
-const int CURRENT_PIN = 5;
-
-
-
 bool bme1Ok = false;
 bool ltr1Ok = false;
 bool bme2Ok = false;
@@ -31,8 +32,28 @@ bool ltr2Ok = false;
 
 const float SEA_LEVEL_PRESSURE_HPA = 1013.25F;
 
-unsigned long lastSend = 0;
-const unsigned long SEND_INTERVAL_MS = 3000;
+const uint64_t DEEP_SLEEP_SECONDS = 60;
+
+// Promena na pocet startu z deep sleep modu, pro otestovani funkce deep sleep
+RTC_DATA_ATTR int bootCount = 0;
+
+// wifi deep sleep promena
+RTC_DATA_ATTR uint8_t bssid[6];
+RTC_DATA_ATTR int channel = 0;
+RTC_DATA_ATTR uint32_t ip, gateway, subnet;
+RTC_DATA_ATTR bool config_valid = false;
+
+// ==================== Funkce =====================
+
+void powerSensors(bool on) {
+  pinMode(SENSOR_POWER_PIN, OUTPUT);
+  pinMode(SENSOR_EN_PIN_1, OUTPUT);
+  pinMode(SENSOR_EN_PIN_2, OUTPUT);
+  digitalWrite(SENSOR_POWER_PIN, on ? HIGH : LOW);
+  digitalWrite(SENSOR_EN_PIN_1, on ? HIGH : LOW);
+  digitalWrite(SENSOR_EN_PIN_2, on ? HIGH : LOW);
+}
+
 
 float measureVoltage() {
   const float VOLTAGE_RATIO = 5.0f;
@@ -40,7 +61,7 @@ float measureVoltage() {
   
   float sum = 0;
   for (int i = 0; i < 10; i++) {
-    sum += analogRead(VOLTAGE_PIN);
+    sum += analogRead(6);
     delay(1);
   }
   float voltADC = (sum / 10.0f) * 3.3f / 4095.0f;
@@ -48,14 +69,13 @@ float measureVoltage() {
   return voltage;
 }
 
-// Měření proudu - vrací hodnotu v Ampérech
 float measureCurrent() {
   const float CURRENT_SENSITIVITY = 0.185f;
   const float CURRENT_OFFSET = 2.5f;
   
   float sum = 0;
   for (int i = 0; i < 10; i++) {
-    sum += analogRead(CURRENT_PIN);
+    sum += analogRead(5);
     delay(1);
   }
   float currADC = (sum / 10.0f) * 3.3f / 4095.0f;
@@ -68,43 +88,76 @@ float measureCurrent() {
   return current;
 }
 
+bool waitForWifi(unsigned long timeoutMs) {
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeoutMs) {
+    delay(20);
+  }
+  return WiFi.status() == WL_CONNECTED;
+}
 
-void connectWifi() {
+bool connectWifi() {
   if (WiFi.status() == WL_CONNECTED) {
-    return;
+    return true;
   }
 
   Serial.print("Pripojuji k WiFi: ");
   Serial.println(WIFI_SSID);
 
   WiFi.mode(WIFI_STA);
+
+  // 1) Pokus o rychly reconnect z RTC cache (deep sleep)
+  if (config_valid && channel > 0) {
+    bool staticOk = WiFi.config(IPAddress(ip), IPAddress(gateway), IPAddress(subnet));
+    if (staticOk) {
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD, channel, bssid);
+      if (waitForWifi(12000)) {
+        Serial.println("WiFi pripojeno (rychly reconnect).");
+        Serial.print("IP adresa ESP: ");
+        Serial.println(WiFi.localIP());
+        return true;
+      }
+    }
+
+    // Cache je nejspis zastarala (BSSID/channel/IP), zneplatnit a jit na ciste DHCP.
+    config_valid = false;
+    WiFi.disconnect(true, true);
+    delay(100);
+  }
+
+  // 2) Fallback: bez cache, klasicke pripojeni s DHCP
+  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  unsigned long start = millis();
-  const unsigned long timeoutMs = 20000;
-
-  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
-    delay(500);
-    Serial.print('.');
-  }
-
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("WiFi pripojeno.");
-    Serial.print("IP adresa ESP: ");
-    Serial.println(WiFi.localIP());
-  } else {
+  if (!waitForWifi(12000)) {
     Serial.println("Nepodarilo se pripojit k WiFi.");
+    return false;
   }
+
+  // Uspesne pripojeni - ulozit hodnoty pro pristi wake-up z deep sleep.
+  ip = WiFi.localIP();
+  gateway = WiFi.gatewayIP();
+  subnet = WiFi.subnetMask();
+  const uint8_t* currentBssid = WiFi.BSSID();
+  if (currentBssid != nullptr) {
+    memcpy(bssid, currentBssid, 6);
+  }
+  channel = WiFi.channel();
+  config_valid = true;
+
+  Serial.println("WiFi pripojeno.");
+  Serial.print("IP adresa ESP: ");
+  Serial.println(WiFi.localIP());
+  return true;
 }
 
 void setupSensors() {
-  pinMode(35, OUTPUT);
-  pinMode(4, OUTPUT);
-  digitalWrite(4, HIGH);
-  pinMode(47, OUTPUT);
-  digitalWrite(47, HIGH);
+
+  // Napeti a proud
+  pinMode(6, INPUT);
+  pinMode(5, INPUT);
+
+  // I2C senzory
   delay(1000);
 
   Wire.begin(42, 2);
@@ -161,6 +214,8 @@ String readPayload() {
     als2 = ltr2.readALS();
   }
 
+  float voltage = measureVoltage();
+  float current = measureCurrent();
   long rssi = WiFi.RSSI();
 
   String payload;
@@ -191,6 +246,12 @@ String readPayload() {
   payload += String(als2);
   payload += ";rssi=";
   payload += String(rssi);
+  payload += ";voltage=";
+  payload += String(voltage, 2);
+  payload += ";current=";
+  payload += String(current, 2);
+  payload += ";boot=";
+  payload += String(bootCount);
   return payload;
 }
 
@@ -223,41 +284,36 @@ bool postPayload(const String &payload) {
   return code > 0 && code < 300;
 }
 
+void sleepForNextCycle() {
+  Serial.println("Ukladam do deep sleep na 60 s...");
+  powerSensors(false);
+  delay(5);
+  Serial.flush();
+  WiFi.disconnect(true, false);
+  WiFi.mode(WIFI_OFF);
+  esp_sleep_enable_timer_wakeup(DEEP_SLEEP_SECONDS * 1000000ULL);
+  esp_deep_sleep_start();
+}
+
 void setup() {
   Serial.begin(115200);
-  while (!Serial) {
-    delay(10);
-  }
-  pinMode(VOLTAGE_PIN, INPUT);
-  pinMode(CURRENT_PIN, INPUT);
 
+  bootCount++;
+
+  powerSensors(true);
+  delay(SENSOR_POWER_STABILIZE_MS);
   setupSensors();
-  connectWifi();
 }
 
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    connectWifi();
-    delay(1000);
-    return;
-  }
-
-
-    float voltage = measureVoltage();
-  float current = measureCurrent();
-  
-  Serial.print("U: ");
-  Serial.print(voltage, 1);
-  Serial.print("V | I: ");
-  Serial.print(current, 2);
-  Serial.println("A");
-  delay(1000);
-
-  if (millis() - lastSend >= SEND_INTERVAL_MS) {
-    lastSend = millis();
+  if (connectWifi()) {
     String payload = readPayload();
     if (!postPayload(payload)) {
       Serial.println("Odeslani selhalo.");
     }
+  } else {
+    Serial.println("WiFi nedostupna, uspavam i bez odeslani.");
   }
+
+  sleepForNextCycle();
 }
