@@ -23,6 +23,9 @@ FIELDNAMES = [
     "uv2",
     "als2",
     "rssi",
+    "voltage",
+    "current",
+    "boot",
     "payload_raw",
 ]
 
@@ -32,11 +35,29 @@ CSV_PATH = Path(__file__).with_name("sensor_data.csv")
 
 
 def ensure_csv_header() -> None:
-    if CSV_PATH.exists() and CSV_PATH.stat().st_size > 0:
+    if not CSV_PATH.exists() or CSV_PATH.stat().st_size == 0:
+        with CSV_PATH.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
+            writer.writeheader()
         return
+
+    with CSV_PATH.open("r", newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        current_header = reader.fieldnames or []
+        if current_header == FIELDNAMES:
+            return
+        rows = list(reader)
+
+    # Re-write old CSV with the new schema and keep existing data.
     with CSV_PATH.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
         writer.writeheader()
+        for old_row in rows:
+            new_row = {field: "" for field in FIELDNAMES}
+            for key, value in old_row.items():
+                if key in new_row:
+                    new_row[key] = value
+            writer.writerow(new_row)
 
 
 def parse_payload(payload: str) -> dict[str, str]:
