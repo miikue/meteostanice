@@ -56,17 +56,17 @@ void powerSensors(bool on) {
 
 
 float measureVoltage() {
-  const float VOLTAGE_RATIO = 5.0f;
-  const float VOLTAGE_CAL = 1.47f;
-  
-  float sum = 0;
-  for (int i = 0; i < 10; i++) {
-    sum += analogRead(6);
-    delay(1);
+  const float R1 = 99000.0f;
+  const float R2 = 99000.0f;
+  const float correction = 1.05f;
+
+  long sum = 0;
+  for (int i = 0; i < 500; i++) {
+    sum += analogRead(7);
+    delayMicroseconds(100);
   }
-  float voltADC = (sum / 10.0f) * 3.3f / 4095.0f;
-  float voltage = voltADC * VOLTAGE_RATIO * VOLTAGE_CAL;
-  return voltage;
+  float vout = (sum / 500.0f / 4095.0f) * 3.3f;
+  return vout * ((R1 + R2) / R2) * correction;
 }
 
 float measureCurrent() {
@@ -154,7 +154,9 @@ bool connectWifi() {
 void setupSensors() {
 
   // Napeti a proud
-  pinMode(6, INPUT);
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
+  pinMode(7, INPUT);
   pinMode(5, INPUT);
 
   // I2C senzory
@@ -215,7 +217,7 @@ String readPayload() {
   }
 
   float voltage = measureVoltage();
-  float current = measureCurrent();
+  float current = 0.0f;
   long rssi = WiFi.RSSI();
 
   String payload;
