@@ -1,6 +1,9 @@
 # Meteostanice
 
+> Plán a stav projektu: [TODO.md](TODO.md)
+
 ESP32-S3 weather station that wakes every 60 s, reads sensors, and POSTs the data over Wi-Fi to a local Python server that stores it in a CSV file.
+In future to Home assistant.
 
 ## Hardware
 
@@ -8,7 +11,7 @@ ESP32-S3 weather station that wakes every 60 s, reads sensors, and POSTs the dat
 - **Sensors (2× independent I2C buses)**:
   - BME280 – temperature, humidity, pressure, altitude
   - LTR390 – UV index, ambient light
-- **Power monitoring**: voltage divider (GPIO 7) + ACS712 current sensor (GPIO 5)
+- **Power monitoring**: voltage divider on GPIO 7 — see [docs/voltage-measurement.md](docs/voltage-measurement.md); ACS712 current sensor wired to GPIO 5 (measurement currently disabled in firmware)
 - **Sensor power switch**: GPIO 35, 4, 47 (powered off before deep sleep)
 
 ## Firmware ([src/main.cpp](src/main.cpp))
@@ -21,12 +24,12 @@ ESP32-S3 weather station that wakes every 60 s, reads sensors, and POSTs the dat
 ### Payload format
 
 ```
-t1=22.50;h1=55.10;p1=1012.30;a1=10.50;uv1=123;als1=456;
-t2=22.40;h2=54.80;p2=1012.25;a2=10.60;uv2=120;als2=450;
-rssi=-65;voltage=4.12;current=0.00;boot=42
+t1=22.50;h1=55.10;p1=1012.30;a1=10.50;uv1=123;als1=456;t2=22.40;h2=54.80;p2=1012.25;a2=10.60;uv2=120;als2=450;rssi=-65;voltage=4.12;current=0.00;boot=42
 ```
 
 ## Server ([src/server/server.py](src/server/server.py))
+
+![Server output](image.png)
 
 Minimal Python HTTP server (no dependencies beyond stdlib).
 
