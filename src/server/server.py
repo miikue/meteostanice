@@ -24,7 +24,8 @@ FIELDNAMES = [
     "als2",
     "rssi",
     "voltage",
-    "current",
+    "panel_v",
+    "panel_i",
     "boot",
     "payload_raw",
 ]

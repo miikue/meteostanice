@@ -29,6 +29,29 @@ bool bme1Ok = false;
 bool ltr1Ok = false;
 bool bme2Ok = false;
 bool ltr2Ok = false;
+bool inaOk  = false;
+
+// INA226 na Wire2 (Bus 1, 0x40), shunt=0.1 Ohm, LSB=0.1 mA
+#define INA226_ADDR  0x40
+#define INA_CONFIG   0x4527  // AVG=16, VBUSCT=1.1ms, VSHCT=1.1ms, continuous
+#define INA_CALIB    512     // 0.00512 / (0.0001 * 0.1)
+#define INA_CUR_LSB  0.0001f
+
+void inaWrite(uint8_t reg, uint16_t val) {
+  Wire2.beginTransmission(INA226_ADDR);
+  Wire2.write(reg);
+  Wire2.write(val >> 8);
+  Wire2.write(val & 0xFF);
+  Wire2.endTransmission();
+}
+
+uint16_t inaRead(uint8_t reg) {
+  Wire2.beginTransmission(INA226_ADDR);
+  Wire2.write(reg);
+  Wire2.endTransmission(false);
+  Wire2.requestFrom((uint8_t)INA226_ADDR, (uint8_t)2);
+  return ((uint16_t)Wire2.read() << 8) | Wire2.read();
+}
 
 const float SEA_LEVEL_PRESSURE_HPA = 1013.25F;
 
@@ -171,10 +194,21 @@ void setupSensors() {
   bme2Ok = bme2.begin(0x77, &Wire2);
   ltr2Ok = ltr2.begin(&Wire2);
 
+  Wire2.beginTransmission(INA226_ADDR);
+  inaOk = (Wire2.endTransmission() == 0);
+  if (inaOk) {
+    inaWrite(0x00, 0x8000);  // reset
+    delay(5);
+    inaWrite(0x00, INA_CONFIG);
+    inaWrite(0x05, INA_CALIB);
+    delay(50);
+  }
+
   if (!bme1Ok) Serial.println("BME1 chyba!");
   if (!ltr1Ok) Serial.println("LTR1 chyba!");
   if (!bme2Ok) Serial.println("BME2 chyba!");
   if (!ltr2Ok) Serial.println("LTR2 chyba!");
+  if (!inaOk)  Serial.println("INA226 chyba!");
 
   if (ltr1Ok) {
     ltr1.setMode(LTR390_MODE_UVS);
@@ -217,8 +251,13 @@ String readPayload() {
   }
 
   float voltage = measureVoltage();
-  float current = 0.0f;
   long rssi = WiFi.RSSI();
+
+  float panel_v = NAN, panel_i = NAN;
+  if (inaOk) {
+    panel_v = (int16_t)inaRead(0x02) * 0.00125f;
+    panel_i = (int16_t)inaRead(0x04) * INA_CUR_LSB;
+  }
 
   String payload;
   payload.reserve(260);
@@ -250,8 +289,10 @@ String readPayload() {
   payload += String(rssi);
   payload += ";voltage=";
   payload += String(voltage, 2);
-  payload += ";current=";
-  payload += String(current, 2);
+  payload += ";panel_v=";
+  payload += String(panel_v, 4);
+  payload += ";panel_i=";
+  payload += String(panel_i, 4);
   payload += ";boot=";
   payload += String(bootCount);
   return payload;

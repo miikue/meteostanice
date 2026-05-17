@@ -14,8 +14,8 @@
 — viz [docs/voltage-measurement.md](docs/voltage-measurement.md)
 
 ## INA226 (proud a napětí solárního panelu)
-- [ ] Zapojit do nabíjecí větve (mezi panel a nabíječku), I2C
-- [ ] Implementovat driver v `main.cpp`, nahradit stávající `measureCurrent()`
+- [x] Zapojit do nabíjecí větve (mezi panel a nabíječku), I2C
+- [x] Implementovat driver v `main.cpp`, nahradit stávající `measureCurrent()`
 - [ ] Kalibrovat (shunt odpor, rozsah)
 
 ## Mikrofon (hluk)
